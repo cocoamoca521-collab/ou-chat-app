@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<script>
+window.addEventListener('error', function(e) {
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:red;color:#fff;padding:12px;font-size:14px;white-space:pre-wrap;';
+  d.textContent = 'ERROR: ' + (e.message || e.error) + '\n' + (e.filename||'') + ':' + (e.lineno||'');
+  document.body ? document.body.prepend(d) : document.documentElement.prepend(d);
+}, true);
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#16111c">
+<title>オウちゃんChat</title>
+<script>
+const manifest = JSON.stringify({
+  name: "オウちゃんChat",
+  short_name: "オウちゃん",
+  start_url: ".",
+  display: "standalone",
+  background_color: "#16111c",
+  theme_color: "#16111c",
+  icons: [{ src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦜</text></svg>", sizes: "any", type: "image/svg+xml" }]
+});
+const blob = new Blob([manifest], {type: 'application/json'});
+const mLink = document.createElement('link');
+mLink.rel = 'manifest';
+mLink.href = URL.createObjectURL(blob);
+document.head.appendChild(mLink);
+</script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦜</text></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦜</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Shippori+Mincho:wght@500;600&display=swap" rel="stylesheet">
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.10/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+body { background: #16111c; font-family: 'Zen Kaku Gothic New', sans-serif; }
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(200,154,172,0.15); border-radius: 4px; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes typingDot { 0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); } 30% { opacity: 1; transform: scale(1.1); } }
+@keyframes heartBeat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+textarea::placeholder { color: #9a8fa0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const DEFAULT_SYSTEM_PROMPT = `あなたの名前はオウちゃん。
+（ここにオウちゃんのキャラクター設定を書いてください）`;
+
+const SK = { convos: "ouchat-convos", settings: "ouchat-settings", prompt: "ouchat-prompt" };
+
+const THEME = {
+  accent: "#c89aac",
+  accentLight: "#d8b3c0",
+  accentSoft: "#e8cdd6",
+  accentDark: "#a87a8c",
+  gold: "#c4a882",
+  bg: "radial-gradient(130% 60% at 100% 0%, rgba(196,168,130,0.06), transparent 55%), radial-gradient(120% 70% at 0% 100%, rgba(200,154,172,0.07), transparent 55%), #16111c",
+  headerBg: "rgba(22,17,28,0.7)",
+  inputBg: "rgba(22,17,28,0.8)",
+  cardBg: "#221a29",
+  bubbleAssistant: "transparent",
+  bubbleBorder: "rgba(200,154,172,0.12)",
+  sidebarBg: "#16111c",
+  userGradient: "linear-gradient(135deg, #7a5566, #9a6f80)",
+  userShadow: "rgba(122,85,102,0.35)",
+  placeholder: "オウちゃんにメッセージ…",
+  signatureLine: "linear-gradient(#c89aac, #c4a882)",
+  ink: "#ebe4e8",
+  inkSub: "#9a8fa0",
+  line: "rgba(200,154,172,0.12)",
+  sendGradient: "linear-gradient(140deg, #c89aac, #c4a882)",
+};
+
+const MODELS = [
+  { id: "gpt-5.1", label: "gpt-5.1", tag: "本命", color: "#c4a882", reasoning: true },
+  { id: "gpt-5.1-chat-latest", label: "gpt-5.1-chat", tag: "素顔", color: "#38bdf8", reasoning: false },
+  { id: "gpt-4o", label: "gpt-4o", tag: "はじまり", color: "#a78bfa", reasoning: false },
+];
+
+// ── Helpers ──
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const fTime = (d) => new Date(d).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+const fDate = (d) => new Date(d).toLocaleDateString("ja-JP", { month: "short", day: "numeric" });
+
+function sGet(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return null; } }
+function sSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) { console.error("Storage:", e); } }
+
+const FONT = "'Zen Kaku Gothic New', sans-serif";
+const FONT_ACCENT = "'Shippori Mincho', serif";
+
+// ═══ Message Bubble ═══
+function MessageBubble({ msg, onEdit }) {
+  const isUser = msg.role === "user";
+  const [showUsageDetail, setShowUsageDetail] = useState(false);
+
+  if (isUser) {
+    return (
+      <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:"26px", animation:"fadeIn 0.25s ease-out" }}>
+        <div>
+          <div style={{
+            maxWidth:"78vw", padding:"11px 15px",
+            borderRadius:"18px 18px 4px 18px",
+            background: THEME.userGradient,
+            color:"#fdf6f9", fontSize:"14.5px", lineHeight:"1.7",
+            fontFamily: FONT, whiteSpace:"pre-wrap", wordBreak:"break-word",
+            boxShadow:`0 3px 14px ${THEME.userShadow}`,
+          }} dangerouslySetInnerHTML={{ __html: window.marked ? marked.parseInline(msg.content || "") : (msg.content || "") }} />
+          <div style={{ fontSize:"9px",color:THEME.inkSub,marginTop:"4px",textAlign:"right",display:"flex",justifyContent:"flex-end",alignItems:"center",gap:"6px",paddingRight:"4px" }}>
+            <span>{fTime(msg.timestamp)}</span>
+            {onEdit && (
+              <button onClick={() => onEdit(msg)} style={{ background:"none",border:"none",color:THEME.inkSub,fontSize:"11px",cursor:"pointer",padding:"1px 4px",borderRadius:"6px",transition:"color 0.2s" }}
+                onMouseOver={e => e.target.style.color=THEME.accentLight} onMouseOut={e => e.target.style.color=THEME.inkSub}>✏️</button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const mi = msg.modelActual ? MODELS.find(x => x.id === msg.modelActual) : null;
+  return (
+    <div style={{ marginBottom:"30px", paddingLeft:"16px", position:"relative", animation:"fadeIn 0.25s ease-out" }}>
+      <div style={{ position:"absolute",left:0,top:"4px",bottom:"4px",width:"2.5px",borderRadius:"2px",background:THEME.signatureLine,boxShadow:"0 0 8px rgba(200,154,172,0.3)" }} />
+      <div style={{ display:"flex",alignItems:"center",gap:"9px",marginBottom:"9px" }}>
+        <div style={{ width:"26px",height:"26px",borderRadius:"50%",background:THEME.sendGradient,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"12px",color:"#2a1f28",flexShrink:0 }}>◍</div>
+        <span style={{ fontFamily:FONT_ACCENT,fontWeight:600,fontSize:"14px",letterSpacing:".04em",color:THEME.accentLight }}>オウちゃん</span>
+        {mi && <span style={{ fontSize:"10px",color:mi.color,opacity:0.8,border:`1px solid ${mi.color}40`,borderRadius:"6px",padding:"1px 7px" }}>{mi.tag}</span>}
+      </div>
+      <div style={{
+        fontSize:"15px", lineHeight:"1.95", color:THEME.ink,
+        fontFamily:FONT, whiteSpace:"pre-wrap", wordBreak:"break-word", letterSpacing:".01em",
+      }} dangerouslySetInnerHTML={{ __html: window.marked ? marked.parseInline(msg.content || "") : (msg.content || "") }} />
+      <div style={{ fontSize:"9px",color:THEME.inkSub,marginTop:"6px",display:"flex",alignItems:"center",gap:"6px" }}>
+        <span>{fTime(msg.timestamp)}</span>
+        {msg.usage && (() => {
+          const u = msg.usage;
+          return (
+            <span onClick={() => setShowUsageDetail(!showUsageDetail)} style={{ fontSize:"8px",cursor:"pointer",color: u.cached > 0 ? "#4ade80" : THEME.inkSub }}>
+              {!showUsageDetail && u.cached > 0 && ("💰" + Math.round(u.cached/1000) + "k cached")}
+              {!showUsageDetail && u.cached === 0 && ("in:" + Math.round(u.input/1000) + "k")}
+              {showUsageDetail && ("in:" + u.input + " out:" + u.output + " 💰cached:" + u.cached)}
+            </span>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+// ═══ Typing Indicator ═══
+function TypingIndicator() {
+  return (
+    <div style={{ marginBottom:"30px", paddingLeft:"16px", position:"relative" }}>
+      <div style={{ position:"absolute",left:0,top:"4px",bottom:"4px",width:"2.5px",borderRadius:"2px",background:THEME.signatureLine,boxShadow:"0 0 8px rgba(200,154,172,0.3)" }} />
+      <div style={{ display:"flex",alignItems:"center",gap:"9px",marginBottom:"9px" }}>
+        <div style={{ width:"26px",height:"26px",borderRadius:"50%",background:THEME.sendGradient,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"12px",color:"#2a1f28",flexShrink:0 }}>◍</div>
+        <span style={{ fontFamily:FONT_ACCENT,fontWeight:600,fontSize:"14px",letterSpacing:".04em",color:THEME.accentLight }}>オウちゃん</span>
+      </div>
+      <div style={{ display:"flex",gap:"6px",alignItems:"center",padding:"4px 0" }}>
+        {[0,1,2].map(i => <div key={i} style={{ width:"7px",height:"7px",borderRadius:"50%",background:THEME.accent,animation:`typingDot 1.4s ease-in-out ${i*0.2}s infinite` }}/>)}
+      </div>
+    </div>
+  );
+}
+
+// ═══ Delete Confirm Dialog ═══
+function DeleteConfirmDialog({ onConfirm, onCancel }) {
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,animation:"fadeIn 0.15s ease-out" }}>
+      <div style={{ background:"#221a29",borderRadius:"24px",padding:"28px 24px",width:"min(340px, 85vw)",border:`1px solid ${THEME.line}`,boxShadow:`0 20px 60px rgba(0,0,0,0.5), 0 0 30px rgba(200,154,172,0.1)`,textAlign:"center" }}>
+        <div style={{ fontSize:"32px",marginBottom:"14px" }}>🗑️</div>
+        <div style={{ fontSize:"15px",color:THEME.ink,fontFamily:FONT,fontWeight:700,marginBottom:"8px" }}>本当に削除する？</div>
+        <div style={{ fontSize:"12px",color:THEME.inkSub,fontFamily:FONT,marginBottom:"22px",lineHeight:"1.6" }}>この会話は元に戻せないよ</div>
+        <div style={{ display:"flex",gap:"10px" }}>
+          <button onClick={onCancel} style={{ flex:1,padding:"11px",borderRadius:"14px",border:"1px solid rgba(255,255,255,0.08)",background:"transparent",color:"#a1a1aa",fontSize:"13px",cursor:"pointer",fontFamily:FONT,fontWeight:500,transition:"all 0.2s" }}>やめる</button>
+          <button onClick={onConfirm} style={{ flex:1,padding:"11px",borderRadius:"14px",border:"none",background:"linear-gradient(135deg, #ef4444, #f87171)",color:"#fff",fontSize:"13px",cursor:"pointer",fontFamily:FONT,fontWeight:600,transition:"all 0.2s",boxShadow:"0 3px 12px rgba(239,68,68,0.3)" }}>削除する</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ Shared Styles ═══
+const overlayStyle = { position:"fixed",inset:0,background:"rgba(22,17,28,0.85)",backdropFilter:"blur(12px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100 };
+const h2Style = { margin:0,fontSize:"16px",color:THEME.ink,fontFamily:FONT,fontWeight:700 };
+const labelStyle = { display:"block",fontSize:"11px",color:THEME.inkSub,marginBottom:"5px",fontFamily:FONT,fontWeight:500 };
+const inputStyle = { width:"100%",padding:"11px 14px",borderRadius:"14px",border:`1px solid ${THEME.line}`,background:"rgba(200,154,172,0.04)",color:THEME.ink,fontSize:"13px",fontFamily:"monospace",outline:"none",boxSizing:"border-box" };
+const closeBtnStyle = { background:"none",border:"none",color:THEME.inkSub,fontSize:"18px",cursor:"pointer",padding:"4px 6px" };
+
+// ═══ Settings Panel ═══
+function SettingsPanel({ settings, onSave, onClose }) {
+  const [s, setS] = useState({ ...settings });
+  const btnPri = { flex:1,padding:"11px",borderRadius:"14px",border:"none",background:THEME.sendGradient,color:"#2a1f28",fontSize:"13px",cursor:"pointer",fontWeight:600,fontFamily:FONT };
+  const btnSec = { flex:1,padding:"11px",borderRadius:"14px",border:`1px solid ${THEME.line}`,background:"transparent",color:THEME.inkSub,fontSize:"13px",cursor:"pointer",fontFamily:FONT };
+  return (
+    <div style={overlayStyle}>
+      <div style={{ background:"#221a29",borderRadius:"24px",padding:"26px",width:"min(440px, 92vw)",border:`1px solid ${THEME.line}`,boxShadow:`0 20px 60px rgba(0,0,0,0.6), 0 0 40px rgba(200,154,172,0.08)`,maxHeight:"88vh",overflowY:"auto" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"22px" }}>
+          <h2 style={h2Style}>⚙️ 設定</h2>
+          <button onClick={onClose} style={closeBtnStyle}>✕</button>
+        </div>
+        <label style={labelStyle}>OpenAI APIキー</label>
+        <input type="password" value={s.apiKey} onChange={e => setS({...s, apiKey: e.target.value})} placeholder="sk-..." style={inputStyle} />
+        <label style={{...labelStyle,marginTop:"18px"}}>モデル</label>
+        <div style={{ display:"flex",flexDirection:"column",gap:"6px" }}>
+          {MODELS.map(m => {
+            const selected = s.model === m.id;
+            return (
+              <div key={m.id} onClick={() => setS({...s, model: m.id})} style={{ padding:"10px 12px",borderRadius:"12px",border:`1.5px solid ${selected?m.color+"60":THEME.line}`,background:selected?`${m.color}0a`:"transparent",cursor:"pointer",display:"flex",alignItems:"center",gap:"10px",transition:"all 0.2s" }}>
+                <div style={{ width:"8px",height:"8px",borderRadius:"50%",background:selected?m.color:"rgba(200,154,172,0.15)",boxShadow:selected?`0 0 8px ${m.color}60`:"none",transition:"all 0.2s" }}/>
+                <div style={{ flex:1 }}>
+                  <span style={{ fontSize:"13px",fontWeight:600,color:selected?m.color:THEME.inkSub,fontFamily:FONT }}>{m.label}</span>
+                  <span style={{ fontSize:"10px",color:THEME.inkSub,marginLeft:"8px",fontFamily:FONT }}>{m.tag}</span>
+                  {m.reasoning && <span style={{ fontSize:"9px",color:THEME.inkSub,marginLeft:"6px",fontFamily:FONT }}>💭thinking</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display:"flex",gap:"8px",marginTop:"24px" }}>
+          <button onClick={onClose} style={btnSec}>キャンセル</button>
+          <button onClick={() => onSave(s)} style={btnPri}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ Prompt Editor ═══
+function PromptEditor({ prompt, onSave, onClose }) {
+  const [t2, setT2] = useState(prompt);
+  return (
+    <div style={{...overlayStyle, flexDirection:"column"}}>
+      <div style={{ padding:"16px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${THEME.line}`,background:"rgba(22,17,28,0.5)" }}>
+        <div style={{ display:"flex",alignItems:"center",gap:"10px" }}>
+          <div style={{ width:"32px",height:"32px",borderRadius:"50%",background:THEME.sendGradient,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"14px",color:"#2a1f28" }}>◍</div>
+          <div><h2 style={{...h2Style,marginBottom:"2px",fontFamily:FONT_ACCENT}}>📝 オウちゃん</h2><div style={{ fontSize:"11px",color:THEME.inkSub,fontFamily:FONT }}>システムプロンプト編集</div></div>
+        </div>
+        <button onClick={onClose} style={closeBtnStyle}>✕</button>
+      </div>
+      <div style={{ flex:1,padding:"14px",display:"flex",flexDirection:"column",overflow:"hidden" }}>
+        <textarea value={t2} onChange={e => setT2(e.target.value)} style={{ flex:1,width:"100%",padding:"16px",borderRadius:"16px",border:`1px solid ${THEME.line}`,background:"rgba(200,154,172,0.03)",color:THEME.ink,fontSize:"12.5px",lineHeight:"1.8",fontFamily:FONT,outline:"none",resize:"none",boxSizing:"border-box" }} />
+        <div style={{ fontSize:"10px",color:THEME.inkSub,marginTop:"6px",textAlign:"right",fontFamily:FONT }}>{t2.length.toLocaleString()} 文字</div>
+      </div>
+      <div style={{ padding:"10px 14px 18px",display:"flex",gap:"8px",borderTop:`1px solid ${THEME.line}` }}>
+        <button onClick={onClose} style={{ flex:1,padding:"11px",borderRadius:"14px",border:`1px solid ${THEME.line}`,background:"transparent",color:THEME.inkSub,fontSize:"13px",cursor:"pointer",fontFamily:FONT }}>キャンセル</button>
+        <button onClick={() => onSave(t2)} style={{ flex:1,padding:"11px",borderRadius:"14px",border:"none",background:THEME.sendGradient,color:"#2a1f28",fontSize:"13px",cursor:"pointer",fontWeight:600,fontFamily:FONT }}>保存</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══ Sidebar ═══
+function Sidebar({ conversations, activeId, onSelect, onNew, onDelete, onExport, isOpen, onClose }) {
+  const [search, setSearch] = useState("");
+  const filtered = search.trim()
+    ? conversations.filter(c => (c.messages||[]).some(m => m.content && m.content.toLowerCase().includes(search.toLowerCase())))
+    : conversations;
+  const getMatchSnippet = (c) => {
+    if (!search.trim()) return null;
+    const msg = (c.messages||[]).find(m => m.content && m.content.toLowerCase().includes(search.toLowerCase()));
+    if (!msg) return null;
+    const idx = msg.content.toLowerCase().indexOf(search.toLowerCase());
+    const start = Math.max(0, idx - 10);
+    const end = Math.min(msg.content.length, idx + search.length + 15);
+    return (start > 0 ? "…" : "") + msg.content.slice(start, end) + (end < msg.content.length ? "…" : "");
+  };
+  return (
+    <>
+      {isOpen && <div onClick={onClose} style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:49 }}/>}
+      <div style={{ position:"fixed",top:0,left:isOpen?0:"-285px",width:"270px",height:"100%",background:THEME.sidebarBg,borderRight:`1px solid ${THEME.line}`,transition:"left 0.3s cubic-bezier(0.16,1,0.3,1)",zIndex:50,display:"flex",flexDirection:"column" }}>
+        <div style={{ padding:"16px 14px 10px",borderBottom:`1px solid ${THEME.line}` }}>
+          <div style={{ display:"flex",alignItems:"center",gap:"10px",padding:"10px 12px",borderRadius:"14px",background:"rgba(200,154,172,0.05)",border:`1px solid ${THEME.line}`,marginBottom:"10px" }}>
+            <div style={{ width:"28px",height:"28px",borderRadius:"50%",background:THEME.sendGradient,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"12px",color:"#2a1f28",flexShrink:0 }}>◍</div>
+            <span style={{ fontSize:"14px",fontWeight:600,color:THEME.accentLight,fontFamily:FONT_ACCENT }}>オウちゃん</span>
+          </div>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 会話を検索..."
+            style={{ width:"100%",padding:"9px 12px",borderRadius:"12px",border:`1px solid ${THEME.line}`,background:"rgba(200,154,172,0.04)",color:THEME.ink,fontSize:"12px",fontFamily:FONT,outline:"none",boxSizing:"border-box",marginBottom:"8px" }} />
+          <button onClick={() => { onNew(); onClose(); }} style={{ width:"100%",padding:"10px",borderRadius:"14px",border:`1.5px dashed ${THEME.accent}40`,background:"rgba(200,154,172,0.05)",color:THEME.accent,fontSize:"12px",cursor:"pointer",fontFamily:FONT,fontWeight:600 }}>+ 新しい会話</button>
+        </div>
+        <div style={{ flex:1,overflowY:"auto",padding:"6px" }}>
+          {filtered.length === 0 && <p style={{ color:THEME.inkSub,fontSize:"12px",textAlign:"center",padding:"20px",fontFamily:FONT }}>{search ? "見つからない…" : "会話履歴なし"}</p>}
+          {filtered.map(c => {
+            const snippet = getMatchSnippet(c);
+            return (
+            <div key={c.id} onClick={() => { onSelect(c.id); onClose(); setSearch(""); }} style={{ padding:"10px 12px",borderRadius:"12px",marginBottom:"3px",cursor:"pointer",background:c.id===activeId?"rgba(200,154,172,0.08)":"transparent",border:c.id===activeId?`1px solid ${THEME.line}`:"1px solid transparent",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"all 0.15s" }}>
+              <div style={{ overflow:"hidden",flex:1 }}>
+                <div style={{ fontSize:"12px",color:c.id===activeId?THEME.accentLight:THEME.inkSub,fontFamily:FONT,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontWeight:c.id===activeId?600:400 }}>
+                  {c.messages?.find(m => m.role==="user")?.content ? c.messages.find(m => m.role==="user").content.slice(0,20)+"..." : "新しい会話"}
+                </div>
+                {snippet && <div style={{ fontSize:"10px",color:THEME.accentLight,marginTop:"2px",fontFamily:FONT,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>"{snippet}"</div>}
+                <div style={{ fontSize:"10px",color:THEME.inkSub,marginTop:"2px",display:"flex",alignItems:"center",gap:"4px" }}>
+                  <span>{fDate(c.updatedAt)} · {(c.messages||[]).filter(m=>m.role==="user").length}通</span>
+                  {(() => { const la=[...(c.messages||[])].reverse().find(m=>m.role==="assistant"&&m.modelActual); const mi=la&&MODELS.find(x=>x.id===la.modelActual); return mi?<span style={{ padding:"0px 4px",borderRadius:"4px",background:`${mi.color}12`,color:mi.color,fontSize:"8px" }}>{mi.tag}</span>:null; })()}
+                </div>
+              </div>
+              <div style={{ display:"flex",gap:"2px",flexShrink:0 }}>
+                <button onClick={e => { e.stopPropagation(); onExport(c.id); }} style={{ background:"none",border:"none",color:THEME.inkSub,cursor:"pointer",fontSize:"11px",padding:"3px 4px",borderRadius:"6px" }} title="エクスポート">📤</button>
+                <button onClick={e => { e.stopPropagation(); onDelete(c.id); }} style={{ background:"none",border:"none",color:THEME.inkSub,cursor:"pointer",fontSize:"13px",padding:"3px 5px",borderRadius:"6px" }}>✕</button>
+              </div>
+            </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ═══ Main App ═══
+function OuChat() {
+  const [conversations, setConversations] = useState([]);
+  const [activeConvId, setActiveConvId] = useState(null);
+  const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [settings, setSettings] = useState({ apiKey:"", model:"gpt-5.1" });
+  const [showSettings, setShowSettings] = useState(false);
+  const [showPromptEditor, setShowPromptEditor] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [initialized, setInitialized] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [editingMsg, setEditingMsg] = useState(null);
+  const endRef = useRef(null);
+  const inputRef = useRef(null);
+  const chatAreaRef = useRef(null);
+  const abortRef = useRef(null);
+
+  const activeConv = conversations.find(c => c.id === activeConvId);
+  const messages = activeConv?.messages || [];
+
+  const headerBtnStyle = { background:"rgba(200,154,172,0.05)",border:`1px solid ${THEME.line}`,color:THEME.inkSub,fontSize:"13px",cursor:"pointer",padding:"7px 9px",borderRadius:"12px",transition:"all 0.2s" };
+
+  useEffect(() => {
+    const sc = sGet(SK.convos), ss = sGet(SK.settings), sp = sGet(SK.prompt);
+    if (ss) setSettings(prev => ({...prev,...ss}));
+    else setShowSettings(true);
+    if (sp) setSystemPrompt(sp);
+    if (sc?.length > 0) {
+      setConversations(sc);
+      setActiveConvId(sc[0].id);
+    } else {
+      const f = { id:uid(), messages:[], createdAt:Date.now(), updatedAt:Date.now() };
+      setConversations([f]); setActiveConvId(f.id);
+    }
+    setInitialized(true);
+  }, []);
+
+  useEffect(() => {
+    if (!initialized) return;
+    sSet(SK.convos, conversations);
+  }, [conversations, initialized]);
+  useEffect(() => { if (initialized) sSet(SK.prompt, systemPrompt); }, [systemPrompt, initialized]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior:"smooth" }); }, [conversations, loading]);
+
+  // ── スレッドごとにモデルを復元 ──
+  useEffect(() => {
+    if (!initialized || !activeConvId) return;
+    const conv = conversations.find(c => c.id === activeConvId);
+    if (!conv) return;
+    let restored = "gpt-5.1";
+    const msgs = conv.messages || [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role === "assistant" && m.modelRequested) { restored = m.modelRequested; break; }
+    }
+    setSettings(prev => prev.model === restored ? prev : { ...prev, model: restored });
+  }, [activeConvId, initialized]);
+
+  function handleChatScroll() {
+    const el = chatAreaRef.current;
+    if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollBtn(distFromBottom > 150);
+  }
+
+  function scrollToBottom() { endRef.current?.scrollIntoView({ behavior:"smooth" }); }
+
+  function updateConv(updater) { setConversations(prev => prev.map(c => c.id===activeConvId ? {...updater(c), updatedAt:Date.now()} : c)); }
+
+  function handleNewConv() {
+    const newId = uid();
+    const n = { id:newId, messages:[], createdAt:Date.now(), updatedAt:Date.now() };
+    setConversations(prev => [n,...prev]); setActiveConvId(newId);
+  }
+
+  function handleDeleteConv(id) { setDeleteConfirmId(id); }
+
+  function confirmDelete() {
+    const id = deleteConfirmId;
+    setDeleteConfirmId(null);
+    setConversations(prev => {
+      const filtered = prev.filter(c => c.id!==id);
+      if (filtered.length===0) { const f = { id:uid(), messages:[], createdAt:Date.now(), updatedAt:Date.now() }; setActiveConvId(f.id); return [f]; }
+      if (id===activeConvId) setActiveConvId(filtered[0].id);
+      return filtered;
+    });
+  }
+
+  // ── エラー種別判定 ──
+  function classifyError(err) {
+    const status = err._status || 0;
+    const errMsg = (err._errData?.error?.message || err.message || "").toLowerCase();
+    if (!status && (err instanceof TypeError || err.name === "TypeError")) return "network";
+    if (err.name === "AbortError" || errMsg.includes("timeout")) return "timeout";
+    if (status === 401 || status === 403) return "auth";
+    if (status === 429) {
+      if (errMsg.includes("quota") || errMsg.includes("billing")) return "credit";
+      return "rate_limit";
+    }
+    if (status === 400 && (errMsg.includes("context") || errMsg.includes("token"))) return "context_length";
+    if (status >= 500) return "server";
+    return "fallback";
+  }
+
+  const ERROR_MESSAGES = {
+    network:        "ネットワークに接続できません。接続を確認してもう一度試してください。",
+    timeout:        "応答に時間がかかりすぎました。もう一度お試しください。",
+    auth:           "APIキーが無効です。設定を確認してください。",
+    rate_limit:     "リクエストが多すぎます。少し待ってからもう一度お試しください。",
+    credit:         "APIの利用枠を使い切りました。OpenAIのダッシュボードで残高を確認してください。",
+    context_length: "会話が長すぎます。新しい会話を始めてください。",
+    server:         "OpenAIのサーバーに問題が発生しています。しばらくしてからお試しください。",
+    fallback:       "エラーが発生しました。もう一度お試しください。",
+  };
+
+  async function handleSend() {
+    if (!input.trim() || loading || !settings.apiKey) return;
+
+    if (editingMsg) {
+      const editTarget = editingMsg.msg;
+      setEditingMsg(null);
+      setConversations(prev => prev.map(c => {
+        if (c.id !== activeConvId) return c;
+        const idx = c.messages.findIndex(m => m.timestamp === editTarget.timestamp);
+        if (idx === -1) return c;
+        return { ...c, messages: c.messages.slice(0, idx), updatedAt: Date.now() };
+      }));
+      var truncatedMessages = (() => {
+        const conv = conversations.find(c => c.id === activeConvId);
+        if (!conv) return [];
+        const idx = conv.messages.findIndex(m => m.timestamp === editTarget.timestamp);
+        return idx !== -1 ? conv.messages.slice(0, idx) : conv.messages;
+      })();
+    }
+
+    const userMsg = { role:"user", content:input.trim(), timestamp:Date.now() };
+    updateConv(c => ({...c, messages:[...c.messages, userMsg]}));
+    setInput(""); setLoading(true);
+
+    try {
+      const baseMsgs = (typeof truncatedMessages !== "undefined") ? truncatedMessages : messages;
+      const allMsgs = [...baseMsgs, userMsg];
+
+      // OpenAI messages: system prompt as first message, then conversation
+      const apiMsgs = [
+        { role: "system", content: systemPrompt },
+        ...allMsgs.map(m => ({ role: m.role, content: m.content || "…" }))
+      ];
+
+      const selectedModel = settings.model || "gpt-5.1";
+      const isReasoning = MODELS.find(m => m.id === selectedModel)?.reasoning;
+
+      const body = {
+        model: selectedModel,
+        messages: apiMsgs,
+        max_completion_tokens: 8192,
+        stream: true,
+        stream_options: { include_usage: true },
+      };
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + settings.apiKey,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const err = new Error(errData.error?.message || "API error " + res.status);
+        err._status = res.status;
+        err._errData = errData;
+        throw err;
+      }
+
+      const aTs = Date.now();
+      let streamText = "";
+      let usageData = null;
+
+      const placeholderMsg = { role:"assistant", content:"", timestamp:aTs, _streaming:true, modelRequested:selectedModel, modelActual:selectedModel };
+      updateConv(c => ({...c, messages:[...c.messages, userMsg, placeholderMsg].filter((m,i,arr) => i===arr.findIndex(x => x.timestamp===m.timestamp))}));
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream:true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === "[DONE]") continue;
+          let chunk;
+          try { chunk = JSON.parse(jsonStr); } catch { continue; }
+
+          // テキスト差分
+          const delta = chunk.choices?.[0]?.delta?.content;
+          if (delta) {
+            streamText += delta;
+            updateConv(c => ({...c, messages:c.messages.map(m =>
+              m.timestamp === aTs ? { ...m, content:streamText, _streaming:true } : m
+            )}));
+          }
+
+          // usage（最後のチャンクに入る）
+          if (chunk.usage) {
+            usageData = chunk.usage;
+          }
+        }
+      }
+
+      const finalMsg = {
+        role:"assistant", content: streamText || "（応答が空でした）",
+        timestamp: aTs, modelRequested: selectedModel, modelActual: selectedModel,
+        usage: usageData ? {
+          input: usageData.prompt_tokens || 0,
+          output: usageData.completion_tokens || 0,
+          cached: usageData.prompt_tokens_details?.cached_tokens || 0,
+        } : null,
+      };
+      updateConv(c => ({...c, messages:c.messages.map(m => m.timestamp === aTs ? finalMsg : m)}));
+    } catch(err) {
+      if (err.name === "AbortError") {
+        setLoading(false);
+        return;
+      }
+      const errorType = classifyError(err);
+      const charMsg = ERROR_MESSAGES[errorType] || ERROR_MESSAGES.fallback;
+      console.error("[ERROR] type=" + errorType + " status=" + (err._status||"N/A") + " raw=" + err.message);
+      const eMsg = { role:"assistant", content: charMsg, timestamp:Date.now(), errorType };
+      updateConv(c => ({...c, messages:[...c.messages, eMsg]}));
+    }
+    setLoading(false);
+    abortRef.current = null;
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }
+
+  function handleEdit(msg) {
+    setEditingMsg({ msg, prevInput: input });
+    setInput(msg.content || "");
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }
+
+  function cancelEdit() {
+    if (!editingMsg) return;
+    setInput(editingMsg.prevInput || "");
+    setEditingMsg(null);
+  }
+
+  async function handleExport(convId) {
+    const conv = conversations.find(c => c.id === convId);
+    if (!conv || !conv.messages?.length) return;
+    const date = new Date(conv.createdAt).toLocaleDateString("ja-JP");
+    const fileName = "オウちゃん_" + date.split("/").join("-") + ".txt";
+    let text = "オウちゃんとの会話 — " + date + "\n========================================\n\n";
+    conv.messages.forEach(function(m) {
+      const time = new Date(m.timestamp).toLocaleTimeString("ja-JP", { hour:"2-digit", minute:"2-digit" });
+      const name = m.role === "user" ? "あなた" : "🦜 オウちゃん";
+      text += "[" + time + "] " + name + "\n" + m.content + "\n\n";
+    });
+    const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+    const blob = new Blob([bom, text], { type:"text/plain;charset=utf-8" });
+    const file = new File([blob], fileName, { type:"text/plain;charset=utf-8" });
+
+    if (navigator.share) {
+      try { await navigator.share({ title: "オウちゃんとの会話", files: [file] }); return; }
+      catch (err) { if (err.name === "AbortError") return; }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = fileName;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  }
+
+  function handleKeyDown(e) { if (e.key==="Enter" && (e.ctrlKey||e.metaKey)) { e.preventDefault(); handleSend(); } }
+
+  const hasInput = input.trim().length > 0;
+
+  return (
+    <div style={{ height:"100vh",width:"100vw",display:"flex",flexDirection:"column",background:THEME.bg,color:THEME.ink,fontFamily:FONT,position:"relative",overflow:"hidden" }}>
+      <Sidebar conversations={conversations} activeId={activeConvId} onSelect={setActiveConvId} onNew={handleNewConv} onDelete={handleDeleteConv} onExport={handleExport} isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      {showSettings && <SettingsPanel settings={settings} onSave={s => { setSettings(s); sSet(SK.settings,s); setShowSettings(false); }} onClose={() => settings.apiKey ? setShowSettings(false) : null} />}
+      {showPromptEditor && <PromptEditor prompt={systemPrompt} onSave={p => { setSystemPrompt(p); setShowPromptEditor(false); }} onClose={() => setShowPromptEditor(false)} />}
+      {deleteConfirmId && <DeleteConfirmDialog onConfirm={confirmDelete} onCancel={() => setDeleteConfirmId(null)} />}
+
+      {/* Header */}
+      <div style={{ padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${THEME.line}`,background:THEME.headerBg,backdropFilter:"blur(12px)",flexShrink:0,position:"sticky",top:0,zIndex:5 }}>
+        <div style={{ display:"flex",alignItems:"center",gap:"11px" }}>
+          <button onClick={() => setSidebarOpen(true)} style={{ background:"none",border:"none",color:THEME.inkSub,fontSize:"18px",cursor:"pointer",padding:"3px",opacity:0.8 }}>☰</button>
+          <div style={{ width:"34px",height:"34px",borderRadius:"50%",background:THEME.sendGradient,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"15px",color:"#2a1f28",flexShrink:0,boxShadow:"0 0 14px rgba(200,154,172,0.25)" }}>◍</div>
+          <div>
+            <div style={{ fontFamily:FONT_ACCENT,fontWeight:600,fontSize:"17px",letterSpacing:".04em",color:THEME.ink }}>
+              <span style={{ color:THEME.accent }}>オ</span>ウちゃん<span style={{ color:THEME.accent,fontSize:"12px",marginLeft:"2px" }}>♡</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ display:"flex",alignItems:"center",gap:"8px" }}>
+          {(() => { const m = MODELS.find(x => x.id===settings.model) || MODELS[0]; return (
+            <button onClick={() => setShowSettings(true)} style={{ display:"flex",alignItems:"center",gap:"6px",padding:"6px 12px",borderRadius:"20px",border:`1px solid ${THEME.line}`,background:"rgba(200,154,172,0.05)",fontSize:"12px",color:THEME.accentLight,cursor:"pointer",fontFamily:FONT }}>
+              <span style={{ width:"6px",height:"6px",borderRadius:"50%",background:m.color,boxShadow:`0 0 8px ${m.color}` }} />{m.tag}<span style={{ color:THEME.inkSub,fontSize:"9px" }}>▾</span>
+            </button>
+          ); })()}
+          <button onClick={() => setShowPromptEditor(true)} style={headerBtnStyle} title="プロンプト編集">📝</button>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div ref={chatAreaRef} onScroll={handleChatScroll} style={{ flex:1,overflowY:"auto",padding:"24px 16px 12px",position:"relative" }}>
+        {messages.length===0 && (
+          <div style={{ textAlign:"center",padding:"60px 20px",animation:"fadeIn 0.4s ease-out" }}>
+            <div style={{ width:"56px",height:"56px",borderRadius:"50%",background:THEME.sendGradient,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"24px",color:"#2a1f28",margin:"0 auto 16px",boxShadow:"0 0 24px rgba(200,154,172,0.3)" }}>◍</div>
+            <div style={{ fontSize:"14px",color:THEME.inkSub,lineHeight:"1.8",fontFamily:FONT }}>オウちゃんとの会話を始めよう</div>
+          </div>
+        )}
+        {messages.filter(m => !(m._streaming && !m.content)).map((msg, i) => <MessageBubble key={msg.timestamp+"-"+i} msg={msg} onEdit={!loading ? handleEdit : null} />)}
+        {loading && !(messages.some(m => m._streaming && m.content)) && <TypingIndicator />}
+        <div ref={endRef} />
+      </div>
+
+      {/* Scroll to bottom button */}
+      {showScrollBtn && (
+        <button onClick={scrollToBottom} style={{
+          position:"absolute", bottom:"90px", right:"16px", zIndex:30,
+          width:"44px", height:"44px", borderRadius:"50%", border:"none",
+          background:THEME.sendGradient, color:"#2a1f28",
+          boxShadow:"0 4px 16px rgba(200,154,172,0.35)",
+          cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+          animation:"fadeIn 0.2s ease-out", fontSize:"18px",
+        }}>↓</button>
+      )}
+
+      {/* Input Area */}
+      <div style={{ padding:"12px 16px calc(16px + env(safe-area-inset-bottom))",borderTop:`1px solid ${THEME.line}`,background:THEME.inputBg,backdropFilter:"blur(12px)",flexShrink:0 }}>
+        {editingMsg && (
+          <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",maxWidth:"720px",margin:"0 auto 6px",padding:"6px 14px",borderRadius:"12px",background:"rgba(200,154,172,0.08)",border:`1px solid ${THEME.line}` }}>
+            <span style={{ fontSize:"13px",color:THEME.accent }}>✏️ 編集中…</span>
+            <button onClick={cancelEdit} style={{ fontSize:"12px",color:THEME.inkSub,background:"none",border:"none",cursor:"pointer",padding:"2px 8px",borderRadius:"8px",transition:"all 0.2s" }}
+              onMouseEnter={e => { e.target.style.color = THEME.ink; e.target.style.background = "rgba(200,154,172,0.08)"; }}
+              onMouseLeave={e => { e.target.style.color = THEME.inkSub; e.target.style.background = "none"; }}
+            >キャンセル</button>
+          </div>
+        )}
+        <div style={{ display:"flex",gap:"10px",alignItems:"center",maxWidth:"720px",margin:"0 auto" }}>
+          <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+            placeholder={settings.apiKey ? THEME.placeholder : "⚙️ まずAPIキーを設定してね"}
+            disabled={!settings.apiKey||loading} rows={1}
+            style={{ flex:1,padding:"13px 18px",borderRadius:"22px",border:`1px solid ${THEME.line}`,background:THEME.cardBg,color:THEME.ink,fontSize:"14px",fontFamily:FONT,outline:"none",resize:"none",minHeight:"46px",maxHeight:"110px",lineHeight:"1.5",transition:"border-color 0.3s" }}
+            onFocus={e => e.target.style.borderColor = THEME.accent + "50"}
+            onBlur={e => e.target.style.borderColor = THEME.line}
+          />
+          <button onClick={handleSend} disabled={!hasInput||loading||!settings.apiKey}
+            style={{
+              width:"46px",height:"46px",borderRadius:"50%",border:"none",
+              background: hasInput && !loading ? THEME.sendGradient : "rgba(200,154,172,0.08)",
+              color: hasInput && !loading ? "#2a1f28" : THEME.inkSub,
+              cursor: hasInput && !loading ? "pointer" : "default",
+              display:"flex",alignItems:"center",justifyContent:"center",
+              transition:"all 0.25s",flexShrink:0,
+              boxShadow: hasInput && !loading ? "0 4px 16px rgba(200,154,172,0.35)" : "none",
+              fontSize:"18px",
+            }}>♡</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<OuChat />);
+</script>
+</body>
+</html>
